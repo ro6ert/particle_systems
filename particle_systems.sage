@@ -13,6 +13,27 @@ browneanSpherical = "browneanSpherical"
 browneanCylindrical = "browneanCylindrical"
 browneanManifold = "browneanManifold"
 
+class string(object):
+    """A string"""
+    def __init(self, **kwargs):
+        self.dimensions = kwargs.get("dimensions")
+        self.forcefields = kwargs.get("forcefields")
+        self.color = kwargs.get("color")
+        self.history = []
+        for forcefield in self.forcefields:
+            forcefield.register_string(self)
+
+    def normalize(self):
+        """normalize to some surface"""
+        pass
+
+    def move(self):
+        self.history.append({"xi":self.dimensions["xi"], "yi":self.dimensions["yi"], "zi":self.dimensions["zi"]})
+        for field in self.forcefields:
+            self.dimensions.update(field.perturb(self.dimensions))
+        self.normalize()
+
+
 class particle(object):
     """a particle"""
     def __init__(self, **kwargs):
@@ -48,9 +69,17 @@ class particle(object):
         y = self.dimensions["y"]
         z = self.dimensions["z"]
         #minimize distance to a given manifold. (Fixme)
-        x_new = x
-        y_new = y
-        z_new = z
+        # https://ask.sagemath.org/question/10911/embedding-a-graphicsplot-on-a-torus/
+        var('u,v')
+        a,b = 50,25
+        x_manifold = (a + b*cos(u))*cos(v)
+        y_manifold = (a + b*cos(u))*sin(v)
+        z_manifold = b*sin(u)
+        distance = sqrt((x-x_manifold)**2+(y-y_manifold)**2+(z-z_manifold)**2)
+        u_min, v_min = minimize(distance, (0,0))
+        x_new = (a+b*cos(u_min))*cos(v_min)
+        y_new = (a+b*cos(u_min))*sin(v_min)
+        z_new = b*sin(u_min)
         self.dimensions["x"] = x_new
         self.dimensions["y"] = y_new
         self.dimensions["z"] = z_new
@@ -58,9 +87,9 @@ class particle(object):
     def normalize(self):
         if False:
             self.spherical_normalize()
-        elif True:
-            self.cylindrical_normalize()
         elif False:
+            self.cylindrical_normalize()
+        elif True:
             self.manifold_normalize()
 
     def move(self):
@@ -236,6 +265,9 @@ class particleFactory(object):
         mote = particle(dimensions=dimensions, forcefields=self.forcefields, color=self.color)
         return mote
 
+    def newString(self):
+        dimensions = {"xi":[], "yi":[], "zi":[], "vxi":[0], "vyi":[0], "vzi":[0], "mi":[1], "ri":[self.radius]}
+
 class particle_systems(object):
     """Shows Particle Systems"""
     particle_list = []
@@ -271,7 +303,7 @@ class particle_systems(object):
         frame.axes(False)
         return frame,frame3d,frame3dtrail
 
-    def __init__(self, field_config_dict, particle_config_list):
+    def __init__(self, field_config_dict, particle_config_list=[], string_config_list=[]):
         """Initializes an object"""
         for profile in field_config_dict:
             forcefield_type = field_config_dict.get(profile).get("forcefield_type", linear_rotation)
@@ -292,48 +324,31 @@ class particle_systems(object):
                 particle = particle_factory.newParticle()
                 self.particle_list.append(particle)
 
+        for profile in string_config_list:
+            forcefield_type_list = profile.get("forcefield_type_list")
+            timeout = profile.get("timeout", 1)
+            number_strings = profile.get("number_strings", 1)
+            color = profile.get("color", "blue")
+            radius = profile.get("radius",50)
+            print(f"forcefield_type_list={forcefield_type_list}")
+            forcefields = [field_config_dict.get(forcefield_type).get("forcefield") for forcefield_type in forcefield_type_list]
+            particle_factory = particleFactory(forcefields=forcefields, timeout=timeout, color=color, radius=radius, forcefield_type_list=forcefield_type_list)
+            for i in range(0, number_particles):
+                particle = particle_factory.newParticle()
+                self.particle_list.append(particle)
+
     def act(self):
         for particle in self.particle_list:
             particle.move()
         for field in self.field_list:
             field.deform()
 
-def main():
-    #plotname="test_3nsov2023"
-    #plotname="brownean"
-    #plotname="browneanSpherical"
-    #plotname="jake"
-    plotname="cylindrical_test"
-    #plotname="manifold_test"
-    forcefield_config = {linear_rotation : {"forcefield_type" : linear_rotation}, 
-        linear_attractor : {"forcefield_type" : linear_attractor}, 
-        linear_rotation_with_attractor : {"forcefield_type" : linear_rotation_with_attractor}, 
-        brownean : {"forcefield_type" : brownean}, 
-        browneanSpherical : {"forcefield_type" : browneanSpherical},
-        browneanSpherical : {"forcefield_type" : browneanSpherical},
-        browneanCylindrical : {"forcefield_type" : browneanCylindrical},
-        browneanManifold : {"forcefield_type" : browneanManifold}]
-    if plotname == "test_3nov2023":
-        particle_config = [{"forcefield_type_list":[linear_rotation], "timeout":1, "number_particles":100, "color":"blue"}, {"forcefield_type_list":[linear_rotation_with_attractor], "timeout":1, "number_particles":100, "color":"blue"}, {"forcefield_type_list":[linear_attractor], "timeout":1, "number_particles":100, "color":"blue"}]
-    elif plotname == "brownean":
-        particle_config = [{"forcefield_type_list":[brownean], "timeout":1, "number_particles":100, "color":"green"}]
-    elif plotname == "browneanSpherical":
-        particle_config = [
-        {"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":25, "color":"blue", "radius":50},
-        #{"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":10, "color":"brown", "radius":52},
-        {"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":20, "color":"green", "radius":51},
-        {"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":5, "color":"grey", "radius":57}
-        ]
-    elif plotname == "jake":
-        particle_config = [
-        {"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":250, "color":"pink", "radius":100}
-        ]
-    elif plotname == "cylindrical_test":
-        particle_config = [{"forcefield_type_list":[browneanCylindrical], "timeout":1, "number_particles":20, "color":"blue", "radius":50},
-                           {"forcefield_type_list":[browneanCylindrical], "timeout":1, "number_particles":20, "color":"yellow", "radius":30}]
-    elif plotname == "manifold_test":
-        particle_config = [{"forcefield_type_list":[browneanManifold], "timeout":1, "number_particles":20, "color":"blue"}]
-    ps = particle_systems(forcefield_config, particle_config)
+def string_movie():
+    plotname = "brownean3d"
+    forcefield_config = {string_brownean : {"forcefield_type":string_brownean}}
+    if plotname == "brownean3d":
+        string_config = [{"forcefield_type_list":[string_brownean], "timeout":1, "number_strings":1, "color":"blue", "circumference_number":10}]
+    ps = particle_systems(forcefield_config, string_config_list=string_config)
     timesteps = 100
     frames = []
     frames3d = []
@@ -356,6 +371,69 @@ def main():
     print("animating frames_3dtrail...")
     animate(frames_3dtrail, xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100, axes=False, frame=False).save(f'results/{plotname}/plots3dtrail.gif')
     #ps.visualize_movie(frames)
+
+def particle_movie():
+    #plotname="test_3nsov2023"
+    #plotname="brownean"
+    plotname="browneanSpherical"
+    #plotname="jake"
+    #plotname="cylindrical_test"
+    #plotname="manifold_test"
+    forcefield_config = {linear_rotation : {"forcefield_type" : linear_rotation}, 
+        linear_attractor : {"forcefield_type" : linear_attractor}, 
+        linear_rotation_with_attractor : {"forcefield_type" : linear_rotation_with_attractor}, 
+        brownean : {"forcefield_type" : brownean}, 
+        browneanSpherical : {"forcefield_type" : browneanSpherical},
+        browneanSpherical : {"forcefield_type" : browneanSpherical},
+        browneanCylindrical : {"forcefield_type" : browneanCylindrical},
+        browneanManifold : {"forcefield_type" : browneanManifold}}
+    if plotname == "test_3nov2023":
+        particle_config = [{"forcefield_type_list":[linear_rotation], "timeout":1, "number_particles":100, "color":"blue"}, {"forcefield_type_list":[linear_rotation_with_attractor], "timeout":1, "number_particles":100, "color":"blue"}, {"forcefield_type_list":[linear_attractor], "timeout":1, "number_particles":100, "color":"blue"}]
+    elif plotname == "brownean":
+        particle_config = [{"forcefield_type_list":[brownean], "timeout":1, "number_particles":100, "color":"green"}]
+    elif plotname == "browneanSpherical":
+        particle_config = [
+        {"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":25, "color":"black", "radius":50},
+        #{"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":10, "color":"brown", "radius":52},
+        #{"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":20, "color":"green", "radius":51},
+        {"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":5, "color":"green", "radius":57}
+        ]
+    elif plotname == "jake":
+        particle_config = [
+        {"forcefield_type_list":[browneanSpherical], "timeout":1, "number_particles":250, "color":"pink", "radius":100}
+        ]
+    elif plotname == "cylindrical_test":
+        particle_config = [{"forcefield_type_list":[browneanCylindrical], "timeout":1, "number_particles":20, "color":"blue", "radius":50},
+                           {"forcefield_type_list":[browneanCylindrical], "timeout":1, "number_particles":20, "color":"yellow", "radius":30}]
+    elif plotname == "manifold_test":
+        particle_config = [{"forcefield_type_list":[browneanManifold], "timeout":1, "number_particles":20, "color":"blue"}]
+    ps = particle_systems(forcefield_config, particle_config_list=particle_config)
+    timesteps = 100
+    frames = []
+    frames3d = []
+    frames_3dtrail=[]
+    for i in range(0,timesteps):
+        print(f"Timestep {i}/{timesteps}")
+        ps.act()
+        if i>1:
+            frame,frame3d,frame_3dtrail = ps.visualize_frame()
+            frame.save(f"results/{plotname}/frame_{i}.png".format(i=i), xmin=-100, xmax=100, ymin=-100, ymax=100)
+            frames.append(frame)
+            frame3d.save(f"results/{plotname}/frame3d_{i}.png".format(i=i), xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100)
+            frames3d.append(frame3d)
+            frame_3dtrail.save(f"results/{plotname}/frame3dtrail_{i}.png".format(i=i), frame=False, xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100)
+            frames_3dtrail.append(frame_3dtrail)
+    print("animating frames...")
+    animate(frames,xmin=-100,xmax=100,ymin=-100, ymax=100, axes=False).save(f'results/{plotname}/plots.gif')
+    print("animating frames3d...")
+    animate(frames3d, xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100, axes=False, frame=False).save(f'results/{plotname}/plots3d.gif')
+    print("animating frames_3dtrail...")
+    animate(frames_3dtrail, xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100, axes=False, frame=False).save(f'results/{plotname}/plots3dtrail.gif')
+    #ps.visualize_movie(frames)
+
+def main():
+    #particle_movie()
+    string_movie()
 
 if __name__ == "__main__":
     main()
