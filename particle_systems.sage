@@ -5,6 +5,7 @@ from sage.plot.plot3d.shapes import *
 from sage.plot.plot3d.shapes2 import Line
 from sage.plot.plot3d.shapes2 import line3d
 
+string_brownean = "string_brownean_field"
 linear_rotation = "linear rotation"
 linear_attractor = "linear attractor"
 linear_rotation_with_attractor = "linear rotation with attractor"
@@ -15,11 +16,12 @@ browneanManifold = "browneanManifold"
 
 class string(object):
     """A string"""
-    def __init(self, **kwargs):
+    def __init__(self, **kwargs):
         self.dimensions = kwargs.get("dimensions")
         self.forcefields = kwargs.get("forcefields")
         self.color = kwargs.get("color")
         self.history = []
+        self.history.append(self.dimensions)
         for forcefield in self.forcefields:
             forcefield.register_string(self)
 
@@ -28,9 +30,16 @@ class string(object):
         pass
 
     def move(self):
-        self.history.append({"xi":self.dimensions["xi"], "yi":self.dimensions["yi"], "zi":self.dimensions["zi"]})
+        old_dimensions = self.history[-1]
+        self.history.append({"xi":self.dimensions["xi"], 
+                             "yi":self.dimensions["yi"], 
+                             "zi":self.dimensions["zi"]})
+        update_dictionary = {}
+        for xi in old_dimensions:
+            update_dictionary[xi+"_old"] = old_dimensions[xi]
+        self.dimensions.update(update_dictionary)
         for field in self.forcefields:
-            self.dimensions.update(field.perturb(self.dimensions))
+            self.dimensions.update(field.perturb_string(self.dimensions))
         self.normalize()
 
 
@@ -102,12 +111,16 @@ class field(object):
     """a field object"""
     def __init__(self):
         self.particles = []
+        self.strings = []
 
     def deform(self):
         pass
 
     def register_particle(self, particle):
         self.particles.append(particle)
+
+    def register_string(self,string):
+        self.strings.append(string)
 
     def force_at_location(self, dimensions):
         return {"vx":0, "vy":0, "vz":0}
@@ -123,6 +136,46 @@ class field(object):
                 vxi_new = dimensions[vxi]+force_at_location_freeze.get(vxi)
                 newdimensions[vxi] = vxi_new
         return newdimensions
+
+    def perturb_string(self, dimensions):
+        newdimensions = {}
+        newdimensions.update(dimensions)
+        force_at_location_freeze=self.force_at_location(dimensions)
+        for xi, vxi in [("xi","vxi"), ("yi","vyi"), ("zi", "vzi")]:
+            if xi in dimensions and vxi in dimensions:
+                xi_new = [N(a+b) for a,b in zip(dimensions[xi], dimensions[vxi])]
+                newdimensions[xi] = xi_new
+                #print(f"{force_at_location_freeze=}")
+                #print(f"{dimensions=}")
+                vxi_new = [N(a+b) for a,b in zip(dimensions[vxi], force_at_location_freeze.get(vxi))]
+                newdimensions[vxi] = vxi_new
+        return newdimensions
+
+class string_brownean_field(field):
+    """this field moves the elements of the string"""
+    def force_at_location(self, dimensions):
+        dt = .01
+        xi = dimensions.get("xi")
+        yi = dimensions.get("yi")
+        zi = dimensions.get("zi")
+        xi_old = dimensions.get("xi_old")
+        yi_old = dimensions.get("yi_old")
+        zi_old = dimensions.get("yi_old")
+        xi_old_taoplus = xi_old[1:len(xi_old)+1]+[xi_old[0]]
+        yi_old_taoplus = yi_old[1:len(yi_old)+1]+[yi_old[0]]
+        zi_old_taoplus = zi_old[1:len(zi_old)+1]+[zi_old[0]]
+        xi_arrow_taoplus = [a-b for a,b in zip(xi, xi_old_taoplus)]
+        yi_arrow_taoplus = [a-b for a,b in zip(yi, yi_old_taoplus)]
+        zi_arrow_taoplus = [a-b for a,b in zip(zi, zi_old_taoplus)]
+        xi_arrow_taominus = [a-b for a,b in zip(xi, xi_old)]
+        yi_arrow_taominus = [a-b for a,b in zip(yi, yi_old)]
+        zi_arrow_taominus = [a-b for a,b in zip(zi, zi_old)]
+        #
+        cross_products = [vector((a,b,c)).cross_product(vector((d,e,f))) for a,b,c,d,e,f in zip(xi_arrow_taoplus, yi_arrow_taoplus, zi_arrow_taoplus, xi_arrow_taominus, yi_arrow_taominus, zi_arrow_taominus)]
+        #print(f"{cross_products=}")
+        return {"vxi":[N(cross_products[i][0]*dt) for i in range(0, len(cross_products))],
+                "vyi":[N(cross_products[i][1]*dt) for i in range(0, len(cross_products))],
+                "vzi":[N(cross_products[i][2]*dt) for i in range(0, len(cross_products))]}
 
 class linearRotationField(field):
     """linear rotation"""
@@ -249,6 +302,8 @@ class forceFieldFactory(object):
             return browneanCylindricalField()
         elif self.forcefield_type == browneanManifold:
             return browneanManifoldField()
+        elif self.forcefield_type == string_brownean_field:
+            return string_brownean_field()
         else:
             return flatField()
 
@@ -256,9 +311,10 @@ class particleFactory(object):
     def __init__(self, **kwargs):
         self.forcefields = kwargs.get("forcefields")
         self.timeout = kwargs.get("timeout")
-        self.color = kwargs.get("color","blue")
-        self.radius = kwargs.get("radius",50)
+        self.color = kwargs.get("color", "blue")
+        self.radius = kwargs.get("radius", 50)
         self.forcefield_type_list = kwargs.get("forcefield_type_list")
+        self.circumference_elements = kwargs.get("circumference_elements", 1)
 
     def newParticle(self):
         dimensions = {"x":random.random()*100-50, "y":random.random()*100-50, "z":random.random()*100-50, "vx":0, "vy":0, "vz":0, "m":1, "r":self.radius}    
@@ -266,12 +322,46 @@ class particleFactory(object):
         return mote
 
     def newString(self):
-        dimensions = {"xi":[], "yi":[], "zi":[], "vxi":[0], "vyi":[0], "vzi":[0], "mi":[1], "ri":[self.radius]}
+        number_elements = self.circumference_elements
+        radius = 50
+        dimensions = {"xi":[radius*cos(2 * pi * i / number_elements) for i in range(0, number_elements)], 
+                      "yi":[radius*sin(2 * pi * i / number_elements) for i in range(0, number_elements)], 
+                      "zi":[0 for i in range(0, number_elements)], 
+                      "vxi":[0 for i in range(0, number_elements)], 
+                      "vyi":[0 for i in range(0, number_elements)], 
+                      "vzi":[0 for i in range(0, number_elements)], 
+                      "mi":[1 for i in range(0, number_elements)], 
+                      "ri":[1 for i in range(0, number_elements)]}
+        loop = string(dimensions=dimensions, forcefields=self.forcefields, color=self.color)
+        return loop
 
 class particle_systems(object):
     """Shows Particle Systems"""
     particle_list = []
+    string_list = []
     field_list = []
+
+    def visualize_frame_string(self):
+        """Visualize a string"""
+        frame = Graphics()
+        frame3d = sage.plot.plot3d.base.Graphics3d()
+        frame.axes(False)
+        #frame3dtrail = sage.plot.plot3d.base.Graphics3d()
+        for string in self.string_list:
+            xi = string.dimensions.get("xi")
+            yi = string.dimensions.get("yi")
+            zi = string.dimensions.get("zi")
+            color=string.color
+            size = string.dimensions.get("m")
+            path = [(a,b,c) for a,b,c in zip(xi,yi,zi)]
+            #path.append(path[0])
+            path = path
+            print(f"{path=}")
+            lin = line3d(path, thickness=1, color='blue')
+            #lin.axes(False)
+            frame += lin
+        return frame
+
 
     def visualize_frame(self):
         """Visualize a particle system"""
@@ -303,6 +393,16 @@ class particle_systems(object):
         frame.axes(False)
         return frame,frame3d,frame3dtrail
 
+    def dataframe_from_particle_history(self):
+        """Create a dataframe of the particle histories."""
+        pass
+        #for particle in self.particle_list:
+        #    x = particle.dimensions.get("x") 
+        #    y = particle.dimensions.get("y")
+        #    z = particle.dimensions.get("z")
+        #df = pd.DataFrame(x=x, y=y, z=z)
+        #self.df = df
+
     def __init__(self, field_config_dict, particle_config_list=[], string_config_list=[]):
         """Initializes an object"""
         for profile in field_config_dict:
@@ -323,53 +423,59 @@ class particle_systems(object):
             for i in range(0, number_particles):
                 particle = particle_factory.newParticle()
                 self.particle_list.append(particle)
-
+        print(f"{string_config_list=}")
         for profile in string_config_list:
             forcefield_type_list = profile.get("forcefield_type_list")
             timeout = profile.get("timeout", 1)
             number_strings = profile.get("number_strings", 1)
             color = profile.get("color", "blue")
             radius = profile.get("radius",50)
-            print(f"forcefield_type_list={forcefield_type_list}")
+            circumference_elements=profile.get("circumference_elements",1)
+            print(f"{forcefield_type_list=}")
+            print(f"{field_config_dict=}")
+            print(f"{forcefield_type=}")
             forcefields = [field_config_dict.get(forcefield_type).get("forcefield") for forcefield_type in forcefield_type_list]
-            particle_factory = particleFactory(forcefields=forcefields, timeout=timeout, color=color, radius=radius, forcefield_type_list=forcefield_type_list)
-            for i in range(0, number_particles):
-                particle = particle_factory.newParticle()
-                self.particle_list.append(particle)
+            particle_factory = particleFactory(forcefields=forcefields, 
+                timeout=timeout, 
+                color=color, 
+                radius=radius, 
+                forcefield_type_list=forcefield_type_list,
+                circumference_elements=circumference_elements)
+            for i in range(0, number_strings):
+                string = particle_factory.newString()
+                self.string_list.append(string)
 
     def act(self):
         for particle in self.particle_list:
             particle.move()
+        for string in self.string_list:
+            string.move()
         for field in self.field_list:
             field.deform()
 
 def string_movie():
-    plotname = "brownean3d"
-    forcefield_config = {string_brownean : {"forcefield_type":string_brownean}}
-    if plotname == "brownean3d":
-        string_config = [{"forcefield_type_list":[string_brownean], "timeout":1, "number_strings":1, "color":"blue", "circumference_number":10}]
-    ps = particle_systems(forcefield_config, string_config_list=string_config)
+    plotname = "string_brownean"
+    forcefield_config = {string_brownean_field : {"forcefield_type":string_brownean_field}}
+    if plotname == "string_brownean":
+        string_config_list = [{"forcefield_type_list":[string_brownean_field], "timeout":1, "number_strings":1, "color":"blue", "circumference_elements":100}]
+    ps = particle_systems(field_config_dict=forcefield_config, string_config_list=string_config_list)
     timesteps = 100
     frames = []
     frames3d = []
     frames_3dtrail=[]
     for i in range(0,timesteps):
-        print(f"Timestep {i}/{timesteps}")
+        print(f"String movie timestep {i}/{timesteps}")
         ps.act()
         if i>1:
-            frame,frame3d,frame_3dtrail = ps.visualize_frame()
-            frame.save(f"results/{plotname}/frame_{i}.png".format(i=i), xmin=-100, xmax=100, ymin=-100, ymax=100)
-            frames.append(frame)
-            frame3d.save(f"results/{plotname}/frame3d_{i}.png".format(i=i), xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100)
+            frame3d = ps.visualize_frame_string()
+            frame3d.save(f"results/{plotname}/frame3d_{i}.png".format(i=i), xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100, labels=False)
             frames3d.append(frame3d)
-            frame_3dtrail.save(f"results/{plotname}/frame3dtrail_{i}.png".format(i=i), frame=False, xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100)
-            frames_3dtrail.append(frame_3dtrail)
-    print("animating frames...")
-    animate(frames,xmin=-100,xmax=100,ymin=-100, ymax=100, axes=False).save(f'results/{plotname}/plots.gif')
+            #frame_3dtrail.save(f"results/{plotname}/frame3dtrail_{i}.png".format(i=i), frame=False, xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100)
+            #frames_3dtrail.append(frame_3dtrail)
     print("animating frames3d...")
     animate(frames3d, xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100, axes=False, frame=False).save(f'results/{plotname}/plots3d.gif')
-    print("animating frames_3dtrail...")
-    animate(frames_3dtrail, xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100, axes=False, frame=False).save(f'results/{plotname}/plots3dtrail.gif')
+    #print("animating frames_3dtrail...")
+    #animate(frames_3dtrail, xmin=-100, xmax=100, ymin=-100, ymax=100, zmin=-100, zmax=100, axes=False, frame=False).save(f'results/{plotname}/plots3dtrail.gif')
     #ps.visualize_movie(frames)
 
 def particle_movie():
@@ -384,11 +490,12 @@ def particle_movie():
         linear_rotation_with_attractor : {"forcefield_type" : linear_rotation_with_attractor}, 
         brownean : {"forcefield_type" : brownean}, 
         browneanSpherical : {"forcefield_type" : browneanSpherical},
-        browneanSpherical : {"forcefield_type" : browneanSpherical},
         browneanCylindrical : {"forcefield_type" : browneanCylindrical},
         browneanManifold : {"forcefield_type" : browneanManifold}}
     if plotname == "test_3nov2023":
-        particle_config = [{"forcefield_type_list":[linear_rotation], "timeout":1, "number_particles":100, "color":"blue"}, {"forcefield_type_list":[linear_rotation_with_attractor], "timeout":1, "number_particles":100, "color":"blue"}, {"forcefield_type_list":[linear_attractor], "timeout":1, "number_particles":100, "color":"blue"}]
+        particle_config = [{"forcefield_type_list":[linear_rotation], "timeout":1, "number_particles":100, "color":"blue"}, 
+                           {"forcefield_type_list":[linear_rotation_with_attractor], "timeout":1, "number_particles":100, "color":"blue"}, 
+                           {"forcefield_type_list":[linear_attractor], "timeout":1, "number_particles":100, "color":"blue"}]
     elif plotname == "brownean":
         particle_config = [{"forcefield_type_list":[brownean], "timeout":1, "number_particles":100, "color":"green"}]
     elif plotname == "browneanSpherical":
